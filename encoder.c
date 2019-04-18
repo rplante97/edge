@@ -72,9 +72,31 @@ static ssize_t edge_write(struct file *filp, const char __user * buf, size_t cou
 {
 	struct edge_data_t *edge_dat;   // Driver data - has gpio pins
 	ssize_t ret=count;				// Return value
-	
-	edge_dat=(struct edge_data_t *)filp->private_data;
+	char *buffer;
 
+	edge_dat=(struct edge_data_t *)filp->private_data;
+	
+	//Just try and send back out what was put in first
+	
+	
+	//Allocate mem in kernel space to hold the passed in user buffer
+	buffer = (char *)kmalloc(count, GFP_KERNEL);
+	if(!buffer){
+		printk(KERN_INFO "Kernel memory allocation failed!\n");
+		return -ENOMEM;
+	}
+
+	//Try to copy the user buffer over to the kernel buffer
+	if(copy_from_user(buffer, buf, count)){
+		printk(KERN_INFO "Buffer copy failed!\n");
+		kfree(buffer);
+		buffer = NULL;
+		return -EFAULT;
+	}
+
+	printk(KERN_INFO "User Data: %c\n", buffer[0]);
+	kfree(buffer);
+	buffer = NULL;
 	return ret;
 }
 
@@ -83,8 +105,13 @@ static ssize_t edge_write(struct file *filp, const char __user * buf, size_t cou
 // Return an appropraite error otherwise
 static int edge_open(struct inode *inode, struct file *filp)
 {
+	//Check file flags to make sure passed in file is write only
+	if(!(filp->f_flags & O_WRONLY)){
+		printk(KERN_INFO "File must be write only!\n");
+		return -EINVAL;
 
-
+	}
+	printk(KERN_INFO "File open succeeded!\n");
 	filp->private_data=edge_data_fops;  // My driver data (edge_dat)
 
 	return 0;
@@ -94,7 +121,8 @@ static int edge_open(struct inode *inode, struct file *filp)
 // What is there to do?
 static int edge_release(struct inode *inode, struct file *filp)
 {
-    return 0;
+	printk(KERN_INFO "File release success!\n");
+    	return 0;
 }
 
 // File operations for the edge device
