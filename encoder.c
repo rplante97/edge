@@ -32,7 +32,8 @@ struct edge_data_t {
 	int major;			// Device major number
 	struct class *edge_class;	// Class for auto /dev population
 	struct device *edge_dev;	// Device for auto /dev population
-			// Write lock
+	struct mutex lock;
+	int delay_clk;		// Write lock
 			// Clock delay - should not be less than 100 us.
 			// lock for ioctl to change the delay
 			// Delay change during transmission does not matter.
@@ -94,7 +95,7 @@ static char * do_encode(char * input, char * output, size_t count)
 static long edge_ioctl(struct file * filp, unsigned int cmd, unsigned long arg)
 {
 	long ret=0;		// Return value
-
+	
 	ret=-EINVAL;
 	return ret;
 }
@@ -121,11 +122,16 @@ static ssize_t edge_write(struct file *filp, const char __user * buf, size_t cou
 	char *buffer; //Buffer user input is stored in
 	char *outbuf; //Buffer encoding output is stored in
 	//int output = 0;
-	int i, j, cur_bit, next_bit;
+	int i, j, cur_bit, next_bit, lock;
 
 	edge_dat=(struct edge_data_t *)filp->private_data;
 	
-	//Just try and send back out what was put in first
+	//Lock before we allocate kernel space buffer for user input
+	lock = mutex_lock_interruptible(&(edge_data_fops->lock));
+	if(lock){
+		printk(KERN_INFO "Lock already taken!\n");
+		return -EACCES;
+	}
 	
 	
 	//Allocate mem in kernel space to hold the passed in user buffer
@@ -158,12 +164,26 @@ static ssize_t edge_write(struct file *filp, const char __user * buf, size_t cou
 			cur_bit = ((outbuf[j] & (1 << i)) > 0); //MSB
 			next_bit = ((outbuf[j] & (1 << (i-1))) > 0); //LSB
 			printk(KERN_CONT "%d%d", cur_bit, next_bit); 	
-		}	
+		}
 		
-
+		//At this point we have out MSB and LSB, write them to the pins
+		//Bring enable high
+		gpiod_set_value(edge_dat->gpio_enable, 1);
+		msleep(20);
+		gpiod_set_value(edge_dat->gpio_bit0, next_bit);
+		gpiod_set_value(edge_dat->gpio_bit1, cur_bit);
+		msleep(20);
+		gpiod_set_value(edge_dat->gpio_clock, 1);	
+		msleep(20);	
+		gpiod_set_value(edge_dat->gpio_clock, 0);
+		//msleep(20);					
+		//gpiod_set_value(edge_dat->gpio_enable, 0);
+		//msleep(20);
 	}
 	printk(KERN_INFO "End of write\n");
 	printk(KERN_INFO "COUNT: %d\n", count);
+	
+	mutex_unlock(&(edge_data_fops->lock));
 	
 	kfree(outbuf);
 	outbuf = NULL;
@@ -365,6 +385,9 @@ static int edge_probe(struct platform_device *pdev)
 	edge_data_fops=edge_dat;
 	
 	// Setup lock(s) & delay
+	//Init for lock
+	mutex_init(&(edge_dat->lock));
+	msleep(20);
 
 	printk(KERN_INFO "Registered\n");
 	dev_info(dev, "Initialized");
