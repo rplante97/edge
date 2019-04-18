@@ -41,6 +41,52 @@ struct edge_data_t {
 // EDGE data structure access between functions
 static struct edge_data_t *edge_data_fops;
 
+static char * do_encode(char * input, char * output, size_t count)
+{
+	char tmp[4];
+	char byte1, byte2;
+	int i, j, first, second;
+	int encode_count = 0;
+	int byte_count = 1;
+	
+	//Loop through passed pointer byte by byte
+	for(j = 0; j < count; j++){
+		//Loop through all 4 bit pairs in the byte and preform the encoding
+		for(i = 0; i < 8; i += 2){
+			first = (input[j] & (1 << (7 - i))) > 0; //1st bit in bit pair
+			second = (input[j] & (1 << (7 - i - 1))) > 0; //second bit in bit pair
+			//Encoding logic
+			if(first == 0){
+				if(second == 0){
+					tmp[i / 2] = 0x0A; //1010
+				}
+				else{
+					tmp[i / 2] = 0x05; //0101
+				}
+			}
+			else{
+				if(second == 0){
+					tmp[i / 2] = 0x09; //1001
+				}
+				else{
+					tmp[i / 2] = 0x06; //0110
+				}
+			}	
+		}			
+		//Here we have encoding for first byte stored in tmp
+		//Create full bytes from our nibbles
+		byte1 = ((tmp[0] << 4) | tmp[1]);
+		byte2 = ((tmp[2] << 4) | tmp[3]);
+		
+		//Write bytes to the encoding buffer
+		output[encode_count] = byte1;
+		output[encode_count + 1] = byte2;
+		byte_count++;
+		encode_count += 2;
+	}
+	printk(KERN_INFO "Encoding succeeded!\n");
+	return output;
+}
 
 // Used to change the clock (high/low pulse widths) period.  At the moment this ioctl
 //   always returns an error.
@@ -72,7 +118,10 @@ static ssize_t edge_write(struct file *filp, const char __user * buf, size_t cou
 {
 	struct edge_data_t *edge_dat;   // Driver data - has gpio pins
 	ssize_t ret=count;				// Return value
-	char *buffer;
+	char *buffer; //Buffer user input is stored in
+	char *outbuf; //Buffer encoding output is stored in
+	//int output = 0;
+	int i, j, cur_bit, next_bit;
 
 	edge_dat=(struct edge_data_t *)filp->private_data;
 	
@@ -85,6 +134,12 @@ static ssize_t edge_write(struct file *filp, const char __user * buf, size_t cou
 		printk(KERN_INFO "Kernel memory allocation failed!\n");
 		return -ENOMEM;
 	}
+	//Allocate mem in kernelspace to hold returned encoding (2* input size)
+	outbuf = (char *)kmalloc(count*2, GFP_KERNEL);
+	if(!buffer){
+		printk(KERN_INFO "Kernel memory allocation failed!\n");
+		return -ENOMEM;
+	}
 
 	//Try to copy the user buffer over to the kernel buffer
 	if(copy_from_user(buffer, buf, count)){
@@ -93,8 +148,25 @@ static ssize_t edge_write(struct file *filp, const char __user * buf, size_t cou
 		buffer = NULL;
 		return -EFAULT;
 	}
+	
+	//Call the do_encode function to preform the encoding on the buffer
+	outbuf = do_encode(buffer, outbuf, count);
 
-	printk(KERN_INFO "User Data: %c\n", buffer[0]);
+
+	for(j = 0; j < count*2; j++){
+		for(i = 7; i >=0; i-=2){
+			cur_bit = ((outbuf[j] & (1 << i)) > 0); //MSB
+			next_bit = ((outbuf[j] & (1 << (i-1))) > 0); //LSB
+			printk(KERN_CONT "%d%d", cur_bit, next_bit); 	
+		}	
+		
+
+	}
+	printk(KERN_INFO "End of write\n");
+	printk(KERN_INFO "COUNT: %d\n", count);
+	
+	kfree(outbuf);
+	outbuf = NULL;
 	kfree(buffer);
 	buffer = NULL;
 	return ret;
